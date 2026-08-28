@@ -1,0 +1,35 @@
+# Secrets — never commit real values
+.env
+.env.*
+!.env.example
+*.decrypted.*
+*secret*.yaml
+!**/templates/*secret*.yaml
+kubeconfig*
+!kubeconfig.example
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Kubernetes / Helm working files
+*.kubeconfig
+charts/*.tgz
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/*
+!.vscode/extensions.json
+
+# Local tooling
+.terraform.lock.hcl.bak
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
