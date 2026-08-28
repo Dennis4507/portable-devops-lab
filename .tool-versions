@@ -1,0 +1,26 @@
+# Pinned tool versions for Project 01 (local, WSL2 + k3d).
+#
+# Read by scripts/verify-01-local.sh (DoD item L00-2) — the script checks
+# each tool below is on PATH and its version output contains this string.
+# Format: one "<tool> <version-substring>" pair per line.
+#
+# Update this file with the REAL observed version immediately after
+# installing or upgrading a tool. Never pin a version you haven't actually
+# verified installs correctly.
+#
+# k3d's default k3s version at install time: v1.35.5-k3s1 (informational —
+# not independently pinned here since it's k3d's own dependency, not a tool
+# on PATH).
+
+git      2.43.0
+docker   29.1.3
+kubectl  v1.36.3
+helm     v3.17.3
+jq       1.7
+argocd   v3.5.1
+k3d      v5.9.0
+k9s      v0.51.0
+yq       v4.53.6
+trivy    0.74.0
+k6       v2.2.0
+kubeseal 0.39.1
