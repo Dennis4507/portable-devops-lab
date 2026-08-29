@@ -1,0 +1,21 @@
+# Reference app v0 — API dependencies.
+# Pinned to exact versions: this file gets baked into the Docker image, and
+# an unpinned dependency that silently upgrades between builds is exactly
+# the kind of drift the git-SHA image tagging in the spec exists to prevent.
+
+fastapi==0.118.0
+uvicorn[standard]==0.34.0
+pydantic==2.10.5
+pydantic-settings==2.7.1
+
+# Database — async engine + Postgres driver
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# Observability
+prometheus-client==0.21.1
+prometheus-fastapi-instrumentator==7.0.0
+
+# ULIDs for order_ref (spec: "ULID, the public handle")
+python-ulid==2.7.0
