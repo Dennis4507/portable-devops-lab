@@ -2,22 +2,44 @@
 The standard operational contract every project in this lab depends on.
 See docs/projects/00-reference-app/spec.md §3.
 
-This file currently implements only /health and /info — the two endpoints
-that need no database. /ready, /metrics, /work and /error-test follow once
-the database layer exists (next build step).
+/health and /info need no database. /ready is the one endpoint that's
+genuinely allowed to touch Postgres. /metrics, /work and /error-test still
+follow later.
 """
 
+import asyncio
 import os
 import socket
 import time
+from pathlib import Path
 
-from fastapi import APIRouter, Request
+from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
+from fastapi import APIRouter, Request, Response, status
+from sqlalchemy import text
 
 from app.config import settings
+from app.db.session import async_session_factory
 
 router = APIRouter()
 
 _HOSTNAME = os.environ.get("HOSTNAME") or socket.gethostname()
+
+# alembic/ sits two levels up from this file (app/routers/contract.py ->
+# app/ -> application/api/ -> alembic/). Read once at import time — the
+# migration files don't change while the process is running.
+_ALEMBIC_DIR = Path(__file__).resolve().parent.parent.parent / "alembic"
+
+
+def _expected_head_revision() -> str | None:
+    """What migration SHOULD the database be at, according to the files
+    shipped in this image? Reads the migration files directly, not the
+    database — this is "the head revision compiled into the image" from
+    the spec, not something that could drift out from under us at runtime.
+    """
+    cfg = AlembicConfig()
+    cfg.set_main_option("script_location", str(_ALEMBIC_DIR))
+    return ScriptDirectory.from_config(cfg).get_current_head()
 
 
 @router.get("/health")
@@ -35,6 +57,72 @@ async def health(request: Request):
         "service": settings.service_name,
         "uptime_seconds": round(uptime, 1),
     }
+
+
+@router.get("/ready")
+async def ready(response: Response):
+    """
+    Readiness. Spec §3.2 — unlike /health, this ALWAYS checks the real
+    database, because "can't reach Postgres" genuinely means "don't send me
+    traffic". Whole check must finish within ready_timeout_ms (500ms
+    default); the connection step alone gets a tighter 250ms budget nested
+    inside that, so a slow-to-acquire connection fails fast rather than
+    eating the entire budget before we even get to the query.
+
+    Always returns 200 or 503 — never 500. A raised exception here would
+    tell Kubernetes "this endpoint itself is broken", when the real
+    situation is just "the dependency is down", which is a 503 by
+    definition.
+    """
+    checks: dict = {}
+    healthy = True
+
+    try:
+        async with asyncio.timeout(settings.ready_timeout_ms / 1000):
+            async with async_session_factory() as session:
+                db_start = time.monotonic()
+                try:
+                    async with asyncio.timeout(0.25):
+                        await session.execute(text("SELECT 1"))
+                except TimeoutError:
+                    checks["database"] = {
+                        "status": "fail",
+                        "error": "connection acquire timeout after 250ms",
+                    }
+                    checks["migrations"] = {"status": "skipped"}
+                    response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+                    return {"status": "not_ready", "checks": checks}
+
+                checks["database"] = {
+                    "status": "ok",
+                    "latency_ms": round((time.monotonic() - db_start) * 1000, 1),
+                }
+
+                if settings.ready_check_migrations:
+                    result = await session.execute(
+                        text("SELECT version_num FROM alembic_version")
+                    )
+                    actual = result.scalar_one_or_none()
+                    expected = _expected_head_revision()
+                    if actual == expected:
+                        checks["migrations"] = {"status": "ok", "version": actual}
+                    else:
+                        checks["migrations"] = {
+                            "status": "fail",
+                            "error": f"database at {actual!r}, expected {expected!r}",
+                        }
+                        healthy = False
+                else:
+                    checks["migrations"] = {"status": "skipped"}
+    except Exception as exc:  # noqa: BLE001 — deliberate: any DB failure -> 503, never 500
+        checks.setdefault("database", {"status": "fail", "error": str(exc)})
+        checks.setdefault("migrations", {"status": "skipped"})
+        healthy = False
+
+    if not healthy:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "not_ready", "checks": checks}
+    return {"status": "ready", "checks": checks}
 
 
 @router.get("/info")

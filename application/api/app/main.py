@@ -13,7 +13,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from ulid import ULID
 
+from sqlalchemy import text
+
 from app.config import settings
+from app.db.session import engine
 from app.logging_config import correlation_id_var, setup_logging
 
 setup_logging()  # must run before any logger is used below
@@ -23,6 +26,20 @@ logger = logging.getLogger("api.access")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.start_time = time.monotonic()
+
+    # Open one connection now so the pool isn't empty when the first real
+    # request (or the first readiness probe) arrives. Without this, /ready
+    # can legitimately time out on its 250ms connection-acquire budget the
+    # very first time it's called — proven empirically: 229.5ms cold vs
+    # ~3ms once the pool is warm. Kubernetes' initialDelaySeconds covers
+    # this gap too, but there's no reason to rely on that alone when
+    # warming the pool here is one line.
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        logger.info("database pool warmed")
+    except Exception as exc:  # noqa: BLE001 — startup must not crash if the DB isn't up yet
+        logger.warning("could not warm database pool at startup", extra={"error": str(exc)})
     logger.info(
         "startup complete",
         extra={"service": settings.service_name, "version": settings.app_version},
@@ -71,6 +88,8 @@ async def correlation_id_and_access_log(request: Request, call_next):
         correlation_id_var.reset(token)
 
 
-from app.routers import contract  # noqa: E402  (after app/middleware defined)
+from app.routers import contract, orders, products  # noqa: E402  (after app/middleware defined)
 
 app.include_router(contract.router)
+app.include_router(products.router)
+app.include_router(orders.router)
